@@ -1,8 +1,10 @@
 // Empty API base URL means same-origin requests, proxied to the backend via
 // next.config.js rewrites in development. This keeps the httpOnly
 // refresh-token cookie first-party so silent session refresh works.
-const rawApiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-export const API_BASE_URL = rawApiUrl.replace(/\/$/, "");
+// REST istekleri her ortamda aynı origin /api üzerinden gider.
+// Vercel bu yolu Render backend'e proxy eder. Böylece eski veya yanlış
+// NEXT_PUBLIC_API_URL değerleri oturum akışını bozamaz.
+export const API_BASE_URL = "";
 
 const rawWsUrl = process.env.NEXT_PUBLIC_WS_URL;
 // May be empty when API_BASE_URL is same-origin; consumers must fall back to
