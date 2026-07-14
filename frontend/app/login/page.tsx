@@ -28,8 +28,7 @@ export default function LoginPage() {
     try {
       const data = await login(email.trim().toLowerCase(), password);
       setAuthSession(data.access_token, data.full_name);
-      router.replace("/");
-      router.refresh();
+      window.location.assign("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Giriş başarısız.");
     } finally {
