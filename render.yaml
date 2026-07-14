@@ -1,0 +1,58 @@
+services:
+  - type: web
+    name: slayz-backend
+    env: python
+    runtime: python3
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 1 -k uvicorn.workers.UvicornWorker app.main:app --bind 0.0.0.0:$PORT --timeout 120
+    healthCheckPath: /api/health
+    disk:
+      name: slayz-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: DATABASE_URL
+        value: sqlite:////data/slayz.db
+      - key: ALLOWED_EMAIL_DOMAIN
+        value: slayz.com
+      - key: SCHEDULER_ENABLED
+        value: "true"
+      - key: RUN_PIPELINE_ON_STARTUP
+        value: "true"
+      - key: FRONTEND_BASE_URL
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: SOCKETIO_CORS_ORIGINS
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: MAIL_PROVIDER
+        sync: false
+      - key: MAIL_API_KEY
+        sync: false
+      - key: MAIL_DEFAULT_FROM
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: APP_SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: DB_ENCRYPTION_KEY
+        generateValue: true
