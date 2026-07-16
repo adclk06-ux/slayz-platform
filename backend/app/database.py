@@ -12,18 +12,27 @@ from app.config import get_settings
 logger = logging.getLogger("slayz.database")
 settings = get_settings()
 
-is_sqlite = settings.database_url.startswith("sqlite")
+# Render/Heroku-style providers may expose the legacy postgres:// scheme.
+# SQLAlchemy 2 expects an explicit PostgreSQL driver URL.
+database_url = settings.database_url.strip()
+if database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql+psycopg2://", 1)
+elif database_url.startswith("postgresql://"):
+    database_url = database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+
+is_sqlite = database_url.startswith("sqlite")
 connect_args = {"check_same_thread": False} if is_sqlite else {}
 
 if is_sqlite:
     # SQLite does not support pool_size/max_overflow (uses SingletonThreadPool/NullPool).
-    engine = create_engine(settings.database_url, connect_args=connect_args, pool_pre_ping=True)
+    engine = create_engine(database_url, connect_args=connect_args, pool_pre_ping=True)
 else:
     engine = create_engine(
-        settings.database_url,
+        database_url,
         pool_size=10,
         max_overflow=20,
         pool_pre_ping=True,
+        pool_recycle=300,
         connect_args=connect_args,
     )
 

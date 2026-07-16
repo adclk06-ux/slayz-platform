@@ -13,7 +13,7 @@ import {
   markRoomRead,
   sendRoomMessage,
 } from "@/lib/api";
-import { disconnectSocket, getSocket } from "@/lib/socket";
+import { getSocket } from "@/lib/socket";
 import { ArrowLeft, MessageSquare, Plus, Search, Send, Users, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 
@@ -167,6 +167,28 @@ export default function ChatSidebar({ open, onOpenChange, showBackButton }: Chat
     return undefined;
   }, [activeRoomId]);
 
+  // Reliable fallback for sleeping/reconnecting hosts. Socket.IO remains the
+  // instant path; this lightweight poll guarantees messages appear without F5.
+  useEffect(() => {
+    if (!activeRoomId) return;
+    let cancelled = false;
+    const sync = async () => {
+      try {
+        const res = await fetchRoomMessages(activeRoomId, { limit: 50 });
+        if (cancelled) return;
+        setMessages((prev) => {
+          const byId = new Map(prev.map((item) => [item.id, item]));
+          res.messages.forEach((item) => byId.set(item.id, item));
+          return Array.from(byId.values()).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        });
+      } catch {}
+    };
+    const timer = window.setInterval(sync, 2500);
+    const onVisible = () => { if (document.visibilityState === "visible") void sync(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, [activeRoomId]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -263,7 +285,13 @@ export default function ChatSidebar({ open, onOpenChange, showBackButton }: Chat
 
     return () => {
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-      disconnectSocket();
+      socket.off("connect");
+      socket.off("disconnect");
+      socket.off("connect_error");
+      socket.off("new_message");
+      socket.off("presence");
+      socket.off("typing");
+      socket.off("read_receipt");
     };
   }, []);
 

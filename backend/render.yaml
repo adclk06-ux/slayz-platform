@@ -1,3 +1,8 @@
+databases:
+  - name: slayz-postgres
+    databaseName: slayz
+    user: slayz
+
 services:
   - type: web
     name: slayz-backend
@@ -7,10 +12,6 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn -w 1 -k uvicorn.workers.UvicornWorker app.main:app --bind 0.0.0.0:$PORT --timeout 120
     healthCheckPath: /api/health
-    disk:
-      name: slayz-data
-      mountPath: /data
-      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
@@ -19,13 +20,17 @@ services:
       - key: DEBUG
         value: "false"
       - key: DATABASE_URL
-        value: sqlite:////data/slayz.db
+        fromDatabase:
+          name: slayz-postgres
+          property: connectionString
       - key: ALLOWED_EMAIL_DOMAIN
         value: slayz.com
       - key: SCHEDULER_ENABLED
         value: "true"
       - key: RUN_PIPELINE_ON_STARTUP
-        value: "true"
+        value: "false"
+      - key: SCRAPER_INTERVAL_MINUTES
+        value: "5"
       - key: FRONTEND_BASE_URL
         sync: false
       - key: ALLOWED_ORIGINS
@@ -39,16 +44,6 @@ services:
       - key: MAIL_API_KEY
         sync: false
       - key: MAIL_DEFAULT_FROM
-        sync: false
-      - key: SMTP_HOST
-        sync: false
-      - key: SMTP_PORT
-        value: "587"
-      - key: SMTP_USERNAME
-        sync: false
-      - key: SMTP_PASSWORD
-        sync: false
-      - key: SMTP_FROM
         sync: false
       - key: APP_SECRET_KEY
         generateValue: true

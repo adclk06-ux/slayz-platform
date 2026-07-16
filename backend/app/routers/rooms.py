@@ -23,7 +23,7 @@ from app.schemas import (
     RoomOut,
 )
 from app.security import get_current_user_payload
-from app.socketio_server import is_user_online, sio
+from app.socketio_server import is_user_online, join_user_to_room, sio
 
 logger = logging.getLogger("slayz.rooms")
 router = APIRouter(prefix="/api/rooms", tags=["rooms"])
@@ -156,7 +156,7 @@ def _message_out(message: Message) -> MessageOut:
 
 
 @router.post("", response_model=RoomOut, status_code=status.HTTP_201_CREATED)
-def create_room(
+async def create_room(
     payload: RoomCreate,
     db: Session = Depends(get_db),
     payload_token: dict = Depends(get_current_user_payload),
@@ -210,6 +210,10 @@ def create_room(
             db.add(RoomMember(room_id=room.id, user_id=other_id))
             db.commit()
             db.refresh(room)
+            # Existing sockets only join rooms known at connect time. Add both
+            # participants immediately so the first message arrives without F5.
+            await join_user_to_room(user_id, room.id)
+            await join_user_to_room(other_id, room.id)
             return _build_room_out(db, room, user_id)
         except Exception as exc:  # noqa: BLE001
             db.rollback()
@@ -250,6 +254,8 @@ def create_room(
         db.add(RoomMember(room_id=room.id, user_id=mid))
     db.commit()
     db.refresh(room)
+    for member_id in member_ids:
+        await join_user_to_room(member_id, room.id)
     logger.info("Group room created: %s by %s", room.id, user_id)
     return _build_room_out(db, room, user_id)
 

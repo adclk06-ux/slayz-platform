@@ -19,10 +19,23 @@ sio = socketio.AsyncServer(
     cors_allowed_origins=settings.socketio_cors_origins,
     logger=settings.debug,
     engineio_logger=settings.debug,
+    ping_interval=20,
+    ping_timeout=30,
 )
 
 _sid_to_user: dict[str, str] = {}
 _user_to_sids: dict[str, set[str]] = {}
+
+
+
+
+async def join_user_to_room(user_id: str, room_id: str) -> None:
+    """Join every currently connected device of a user to a newly-created room."""
+    for sid in list(_user_to_sids.get(user_id, set())):
+        try:
+            await sio.enter_room(sid, room_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not join sid=%s user=%s to room=%s: %s", sid, user_id, room_id, exc)
 
 
 def is_user_online(user_id: str) -> bool:

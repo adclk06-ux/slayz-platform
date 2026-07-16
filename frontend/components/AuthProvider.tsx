@@ -1,114 +1,100 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { AuthUser, clearAuthSession, getCurrentUser, logout, refreshSession, setAuthSession } from "@/lib/api";
 
-interface AuthContextValue {
-  user: AuthUser | null;
-  loading: boolean;
-  refresh: () => Promise<void>;
-  signOut: () => Promise<void>;
-}
-
-const AuthContext = createContext<AuthContextValue>({
-  user: null,
-  loading: true,
-  refresh: async () => {},
-  signOut: async () => {},
-});
-
-export function useAuth() {
-  return useContext(AuthContext);
-}
-
-const isDev = process.env.NODE_ENV === "development";
-
-function authDebug(event: string, detail?: Record<string, unknown>) {
-  if (!isDev) return;
-  // eslint-disable-next-line no-console
-  console.debug(`[auth] ${event}`, detail ?? "");
-}
+interface AuthContextValue { user: AuthUser | null; loading: boolean; refresh: () => Promise<void>; signOut: () => Promise<void>; }
+const AuthContext = createContext<AuthContextValue>({ user: null, loading: true, refresh: async () => {}, signOut: async () => {} });
+export function useAuth() { return useContext(AuthContext); }
+const PUBLIC_ROUTES = ["/login", "/setup", "/landing"];
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const running = useRef(false);
 
-  const loadUser = async () => {
-    const me = await getCurrentUser();
-    authDebug("me_ok", { userId: me.id });
-    setUser(me);
-  };
-
-  const refresh = async () => {
-    if (typeof window === "undefined") return;
-    const token = window.localStorage.getItem("slayz_token");
-    authDebug("refresh_start", {
-      pathname,
-      hasToken: Boolean(token),
-      hasAuthCookie: document.cookie.includes("slayz_authenticated=1"),
-    });
+  const refresh = useCallback(async () => {
+    if (typeof window === "undefined" || running.current) return;
+    running.current = true;
     setLoading(true);
+    let authenticated = false;
+    let lastError: unknown = null;
     try {
-      if (token) {
-        await loadUser();
-      } else {
-        const session = await refreshSession();
-        setAuthSession(session.access_token, session.full_name);
-        await loadUser();
+      // Render free instances can need time to wake. Never destroy a valid
+      // local session merely because the network is temporarily unavailable.
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        try {
+          const token = window.localStorage.getItem("slayz_token");
+          if (!token) {
+            const session = await refreshSession();
+            setAuthSession(session.access_token, session.full_name);
+          }
+          const me = await getCurrentUser();
+          setUser(me);
+          authenticated = true;
+          break;
+        } catch (err) {
+          lastError = err;
+          try {
+            const session = await refreshSession();
+            setAuthSession(session.access_token, session.full_name);
+            const me = await getCurrentUser();
+            setUser(me);
+            authenticated = true;
+            break;
+          } catch (refreshErr) {
+            lastError = refreshErr;
+          }
+          await wait(Math.min(1500 * (attempt + 1), 6000));
+        }
       }
-    } catch (meErr) {
-      authDebug("me_failed", { error: String(meErr) });
-      // Access token may be expired; try silent refresh once.
-      try {
-        const session = await refreshSession();
-        authDebug("refresh_ok");
-        setAuthSession(session.access_token, session.full_name);
-        await loadUser();
-      } catch (refreshErr) {
-        authDebug("auth_refresh_failed", { error: String(refreshErr) });
-        clearAuthSession();
-        setUser(null);
+      if (!authenticated) {
+        // Only clear credentials after repeated definitive auth failures.
+        const message = String(lastError || "").toLowerCase();
+        if (message.includes("401") || message.includes("oturum") || message.includes("kullanıcı bulunamadı")) {
+          clearAuthSession();
+          setUser(null);
+        }
       }
     } finally {
       setLoading(false);
+      running.current = false;
     }
-  };
-
-  const signOut = async () => {
-    try {
-      await logout();
-    } catch {
-      // ignore logout errors
-    }
-    clearAuthSession();
-    setUser(null);
-    router.push("/login");
-  };
-
-  useEffect(() => {
-    refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Redirect unauthenticated users away from protected routes.
-  // The guard waits for the initial auth check to finish before redirecting,
-  // which prevents the protected page from flickering while /api/auth/me is in flight.
-  useEffect(() => {
-    authDebug("route_change", { pathname, loading, authenticated: Boolean(user) });
-    if (loading) return;
-    const publicRoutes = ["/login", "/setup", "/landing"];
-    if (!user && !publicRoutes.includes(pathname)) {
-      authDebug("redirect_to_login", { reason: "auth_missing", from: pathname });
-      router.push("/login");
-    }
-  }, [user, loading, pathname, router]);
+  const signOut = async () => {
+    try { await logout(); } catch {}
+    clearAuthSession();
+    setUser(null);
+    window.location.assign("/login");
+  };
 
-  return (
-    <AuthContext.Provider value={{ user, loading, refresh, signOut }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    const resume = () => { if (document.visibilityState === "visible") void refresh(); };
+    window.addEventListener("online", resume);
+    document.addEventListener("visibilitychange", resume);
+    const timer = window.setInterval(() => void refresh(), 6 * 60 * 1000);
+    return () => { window.removeEventListener("online", resume); document.removeEventListener("visibilitychange", resume); window.clearInterval(timer); };
+  }, [refresh]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (!user && !PUBLIC_ROUTES.includes(pathname)) router.replace("/login");
+  }, [loading, pathname, router, user]);
+
+  const isPublic = PUBLIC_ROUTES.includes(pathname);
+  return <AuthContext.Provider value={{ user, loading, refresh, signOut }}>
+    {loading && !isPublic ? (
+      <div className="grid min-h-screen place-items-center bg-slate-50 px-6 text-center">
+        <div><div className="mx-auto mb-4 h-9 w-9 animate-spin rounded-full border-4 border-indigo-100 border-t-indigo-600" />
+        <div className="font-semibold text-slate-800">Slayz hazırlanıyor</div>
+        <div className="mt-1 text-sm text-slate-500">Güvenli oturum ve canlı veriler bağlanıyor…</div></div>
+      </div>
+    ) : children}
+  </AuthContext.Provider>;
 }

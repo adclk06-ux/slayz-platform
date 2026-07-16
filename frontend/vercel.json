@@ -1,8 +1,5 @@
 {
   "rewrites": [
-    {
-      "source": "/api/:path*",
-      "destination": "https://slayz-platform.onrender.com/api/:path*"
-    }
+    { "source": "/api/:path*", "destination": "https://slayz-platform.onrender.com/api/:path*" }
   ]
 }

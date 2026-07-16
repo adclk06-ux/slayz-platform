@@ -63,9 +63,9 @@ class Settings(BaseSettings):
     )
     scraper_proxy_list: str = ""
     scraper_request_delay_seconds: int = 2
-    scraper_interval_minutes: int = 1
+    scraper_interval_minutes: int = 5
     scheduler_enabled: bool = True
-    run_pipeline_on_startup: bool = True
+    run_pipeline_on_startup: bool = False
 
     # Market data
     # Never invent live prices in production. Enable only for UI development.

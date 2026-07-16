@@ -1,9 +1,6 @@
 // Empty API base URL means same-origin requests, proxied to the backend via
 // next.config.js rewrites in development. This keeps the httpOnly
 // refresh-token cookie first-party so silent session refresh works.
-// REST istekleri her ortamda aynı origin /api üzerinden gider.
-// Vercel bu yolu Render backend'e proxy eder. Böylece eski veya yanlış
-// NEXT_PUBLIC_API_URL değerleri oturum akışını bozamaz.
 export const API_BASE_URL = "";
 
 const rawWsUrl = process.env.NEXT_PUBLIC_WS_URL;
@@ -77,6 +74,7 @@ export function setAuthSession(accessToken: string, fullName: string) {
   window.localStorage.setItem("slayz_token", accessToken);
   window.localStorage.setItem("slayz_user_name", fullName);
   document.cookie = `${AUTH_COOKIE_NAME}=1; path=/; max-age=${60 * 60 * 24 * 30}; SameSite=Lax`;
+  window.dispatchEvent(new CustomEvent("slayz-token-updated", { detail: { accessToken } }));
 }
 
 export function clearAuthSession() {
@@ -85,41 +83,58 @@ export function clearAuthSession() {
   document.cookie = `${AUTH_COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
 }
 
-async function apiFetch<T>(url: string, options: RequestInit = {}, allowRetry = true): Promise<T> {
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      ...authHeaders(),
-      ...(options.headers || {}),
-    },
-    credentials: "include",
-    cache: "no-store",
-  });
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-  if (res.status === 401 && allowRetry) {
-    // Try silent refresh once using the httpOnly refresh-token cookie.
+class HttpStatusError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+  }
+}
+
+async function apiFetch<T>(url: string, options: RequestInit = {}, allowRefresh = true): Promise<T> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      const session = await refreshSession();
-      window.localStorage.setItem("slayz_token", session.access_token);
-      return apiFetch<T>(url, options, false);
-    } catch {
-      if (process.env.NODE_ENV === "development") {
-        // eslint-disable-next-line no-console
-        console.debug("[auth] redirect_to_login", { reason: "auth_refresh_failed", url });
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 30000);
+      const res = await fetch(url, {
+        ...options,
+        signal: options.signal || controller.signal,
+        headers: { ...authHeaders(), ...(options.headers || {}) },
+        credentials: "include",
+        cache: "no-store",
+      });
+      clearTimeout(timer);
+
+      if (res.status === 401 && allowRefresh) {
+        const session = await refreshSession();
+        setAuthSession(session.access_token, session.full_name);
+        return apiFetch<T>(url, options, false);
       }
-      clearAuthSession();
-      if (typeof window !== "undefined") {
-        window.location.href = "/login";
+      if ([502, 503, 504].includes(res.status) && attempt < 4) {
+        await sleep(1200 * (attempt + 1));
+        continue;
       }
-      throw new Error("Oturum sonlandı, lütfen tekrar giriş yapın.");
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new HttpStatusError(res.status, body?.detail || `İstek başarısız (${res.status}).`);
+      }
+      return res.json();
+    } catch (err) {
+      lastError = err;
+      if (err instanceof HttpStatusError) {
+        if ((err.status === 401 || err.status === 403) && allowRefresh) throw err;
+        if (![502, 503, 504].includes(err.status)) throw err;
+      }
+      if (attempt < 4) {
+        await sleep(1200 * (attempt + 1));
+        continue;
+      }
     }
   }
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new Error(body?.detail || `İstek başarısız (${res.status}).`);
-  }
-  return res.json();
+  throw lastError instanceof Error ? lastError : new Error("Sunucuya ulaşılamadı. Lütfen tekrar deneyin.");
 }
 
 export async function login(email: string, password: string) {

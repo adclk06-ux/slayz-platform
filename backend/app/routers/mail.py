@@ -1,4 +1,3 @@
-from __future__ import annotations
 """Authenticated enterprise e-mail gateway endpoints."""
 import logging
 import os

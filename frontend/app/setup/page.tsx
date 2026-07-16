@@ -37,7 +37,7 @@ export default function SetupPage() {
       await bootstrapAdmin({ full_name: fullName, email, password });
       const session = await login(email.trim().toLowerCase(), password);
       setAuthSession(session.access_token, session.full_name);
-      router.replace("/admin/users");
+      window.location.assign("/admin/users");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Kurulum tamamlanamadı.");
     } finally {
