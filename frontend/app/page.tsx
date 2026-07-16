@@ -8,6 +8,7 @@ import {
   BriefingSnapshot,
   FeedStatus,
   clearAuthSession,
+  ensureNewsFeed,
   fetchArticles,
   fetchFeedStatus,
   fetchInboxUnreadCount,
@@ -65,6 +66,7 @@ export default function DashboardPage() {
   const [feedStatus, setFeedStatus] = useState<FeedStatus | null>(null);
   const [inboxUnread, setInboxUnread] = useState(0);
   const [pipelineRunning, setPipelineRunning] = useState(false);
+  const [feedWarming, setFeedWarming] = useState(false);
 
   // Real-time collaboration UI state
   const [inboxOpen, setInboxOpen] = useState(false);
@@ -81,7 +83,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     setUserName(window.localStorage.getItem("slayz_user_name"));
-    loadArticles();
+    void loadDashboardFeed();
     loadBriefing();
     loadStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -123,6 +125,36 @@ export default function DashboardPage() {
 
     return () => clearInterval(interval);
   }, [category, macroRegion, megaCapOnly]);
+
+  async function loadDashboardFeed() {
+    await loadArticles();
+
+    // A newly provisioned PostgreSQL database is intentionally empty. Ask the
+    // backend to warm the live RSS feed, then poll briefly instead of displaying
+    // a permanent empty state. This also recovers cleanly after Render wakes up.
+    if (articlesRef.current.length === 0 && !category && !macroRegion && !megaCapOnly) {
+      try {
+        const result = await ensureNewsFeed();
+        if (result.scheduled || result.refresh_running || !result.has_articles) {
+          setFeedWarming(true);
+          for (let attempt = 0; attempt < 10; attempt += 1) {
+            await new Promise((resolve) => window.setTimeout(resolve, 4000));
+            const fresh = await fetchArticles({ primary_only: true });
+            if (fresh.length > 0) {
+              setArticles(fresh);
+              setFeedWarming(false);
+              await loadStatus();
+              return;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Feed warm-up failed:", err);
+      } finally {
+        setFeedWarming(false);
+      }
+    }
+  }
 
   async function loadArticles() {
     if (articlesRef.current.length === 0) setLoading(true);
@@ -357,7 +389,10 @@ export default function DashboardPage() {
         {loading ? (
           <div className="text-slate-400 text-sm py-20 text-center">Yükleniyor...</div>
         ) : articles.length === 0 ? (
-          <div className="text-slate-400 text-sm py-20 text-center">Henüz haber bulunmuyor.</div>
+          <div className="py-20 text-center">
+            <div className="text-sm font-semibold text-slate-600">{feedWarming ? "Canlı haber kaynakları taranıyor…" : "Henüz haber bulunmuyor."}</div>
+            <div className="mt-2 text-xs text-slate-400">{feedWarming ? "İlk senkronizasyon birkaç saniye sürebilir; sayfayı yenilemen gerekmiyor." : "Kaynakları Tara düğmesiyle akışı hemen yenileyebilirsin."}</div>
+          </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             {articles.map((article) => (

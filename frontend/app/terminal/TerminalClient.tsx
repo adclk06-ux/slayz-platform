@@ -41,6 +41,7 @@ import {
   Article,
   DividendEvent,
   fetchArticles,
+  ensureNewsFeed,
   fetchArticlesByTicker,
   fetchMarketOverview,
   fetchTickerDetail,
@@ -318,7 +319,16 @@ export default function TerminalClient() {
       });
       const merged = new Map<string, Article>();
       [...tickerMatches, ...fromGlobal].forEach((article) => merged.set(article.id, article));
-      setTickerNews(Array.from(merged.values()).sort((a, b) => new Date(b.scraped_at).getTime() - new Date(a.scraped_at).getTime()));
+      let news = Array.from(merged.values()).sort((a, b) => new Date(b.scraped_at).getTime() - new Date(a.scraped_at).getTime());
+
+      if (news.length === 0) {
+        const warmup = await ensureNewsFeed().catch(() => null);
+        if (warmup?.scheduled || warmup?.refresh_running || !warmup?.has_articles) {
+          await new Promise((resolve) => window.setTimeout(resolve, 7000));
+          news = await fetchArticlesByTicker(ticker.symbol, 20).catch(() => [] as Article[]);
+        }
+      }
+      setTickerNews(news);
     } catch {
       setTickerNews([]);
     }

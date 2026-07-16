@@ -4,10 +4,11 @@ institutional filters, briefing snapshots, and manual pipeline trigger.
 Protected with RBAC (ANALYST/ADMIN can review).
 """
 import logging
-from datetime import datetime
+import threading
+from datetime import datetime, timedelta
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -34,6 +35,22 @@ from app.security import (
 
 logger = logging.getLogger("slayz.articles")
 router = APIRouter(prefix="/api/articles", tags=["articles"])
+_feed_refresh_lock = threading.Lock()
+_feed_refresh_running = False
+
+
+def _refresh_feed_background() -> None:
+    global _feed_refresh_running
+    try:
+        from app.pipeline import run_ingestion_pipeline_standalone
+        result = run_ingestion_pipeline_standalone()
+        logger.info("On-demand feed bootstrap complete: %s", result)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("On-demand feed bootstrap failed: %s", exc, exc_info=True)
+    finally:
+        with _feed_refresh_lock:
+            _feed_refresh_running = False
+
 
 
 @router.get("", response_model=List[ArticleOut])
@@ -133,6 +150,39 @@ def list_articles_by_ticker(
     if fallback_category:
         query = query.filter(Article.category == fallback_category)
     return query.order_by(Article.scraped_at.desc()).limit(min(limit, 15)).all()
+
+
+@router.post("/ensure-feed")
+def ensure_feed(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _: dict = Depends(get_current_user_payload),
+):
+    """Queue a non-blocking source scan when the feed is empty or stale.
+
+    This endpoint is safe for normal users to call during app startup. It does not
+    block the page while RSS/HTML sources are fetched and it coalesces concurrent
+    browser requests into one background run.
+    """
+    global _feed_refresh_running
+    latest = db.query(Article).order_by(Article.scraped_at.desc()).first()
+    stale_before = datetime.utcnow() - timedelta(minutes=20)
+    needs_refresh = latest is None or latest.scraped_at < stale_before
+
+    scheduled = False
+    if needs_refresh:
+        with _feed_refresh_lock:
+            if not _feed_refresh_running:
+                _feed_refresh_running = True
+                scheduled = True
+                background_tasks.add_task(_refresh_feed_background)
+
+    return {
+        "scheduled": scheduled,
+        "refresh_running": _feed_refresh_running,
+        "has_articles": latest is not None,
+        "latest_article_at": latest.scraped_at if latest else None,
+    }
 
 
 @router.get("/feed-status")

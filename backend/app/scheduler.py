@@ -3,6 +3,7 @@ Background scheduler for periodic scraping, analysis, and institutional
 briefing runs.
 """
 import logging
+from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -11,6 +12,7 @@ from app.briefing.engine import run_afternoon_briefing, run_morning_briefing
 from app.config import get_settings
 from app.database import SessionLocal
 from app.market.ticker_worker import refresh_tickers, seed_history
+from app.models import Article
 from app.pipeline import run_ingestion_pipeline
 
 logger = logging.getLogger("slayz.scheduler")
@@ -68,9 +70,26 @@ def start_scheduler():
             id="ingestion_pipeline",
             replace_existing=True,
         )
-        if settings.run_pipeline_on_startup:
-            # Optional immediate run. Production can disable this to keep deploys fast.
-            _scheduler.add_job(_scheduled_job, id="ingestion_pipeline_initial_run", replace_existing=True)
+        # A fresh PostgreSQL database starts empty. Render free instances also sleep and
+        # restart, so waiting for the first interval made both the dashboard and the
+        # ticker-news panel look broken for several minutes. Always queue a delayed,
+        # non-blocking ingestion run when the feed is empty; operators can still force
+        # startup ingestion with RUN_PIPELINE_ON_STARTUP=true.
+        db = SessionLocal()
+        try:
+            feed_is_empty = db.query(Article.id).first() is None
+        finally:
+            db.close()
+
+        if settings.run_pipeline_on_startup or feed_is_empty:
+            _scheduler.add_job(
+                _scheduled_job,
+                "date",
+                run_date=datetime.now() + timedelta(seconds=3),
+                id="ingestion_pipeline_initial_run",
+                replace_existing=True,
+            )
+            logger.info("Initial news ingestion queued. empty_feed=%s", feed_is_empty)
 
         # Market ticker loop: refresh every 30 seconds with realistic fallback data.
         # Seed history runs immediately so the terminal has data right away; the

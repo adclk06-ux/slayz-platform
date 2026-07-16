@@ -442,6 +442,17 @@ export async function fetchFeedStatus(): Promise<FeedStatus> {
   return apiFetch<FeedStatus>(`${API_BASE_URL}/api/articles/feed-status`);
 }
 
+export interface EnsureFeedResult {
+  scheduled: boolean;
+  refresh_running: boolean;
+  has_articles: boolean;
+  latest_article_at: string | null;
+}
+
+export async function ensureNewsFeed(): Promise<EnsureFeedResult> {
+  return apiFetch<EnsureFeedResult>(`${API_BASE_URL}/api/articles/ensure-feed`, { method: "POST" });
+}
+
 export async function runNewsPipeline(): Promise<{ scraped: number; analyzed: number; emailed: number }> {
   return apiFetch(`${API_BASE_URL}/api/articles/pipeline/run`, { method: "POST" });
 }
